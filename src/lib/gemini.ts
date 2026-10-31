@@ -38,7 +38,7 @@ function requiredEnv(name: "GEMINI_API_KEY" | "AI_MODEL") {
 }
 
 export function getAiModel() {
-  return requiredEnv("AI_MODEL");
+  return process.env.AI_MODEL?.trim() || "gemma-4-31b-it";
 }
 
 function getClient() {

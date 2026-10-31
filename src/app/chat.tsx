@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { TaxiStop } from "@/data/taxi-stops";
 import type { LocationState, MapPoint } from "./route-map";
 import { MessageContent } from "./message-content";
@@ -24,7 +24,15 @@ const suggestions = [
   "Où prendre un taxi pour l’hôpital Sendwe ?",
 ];
 
-export function Chat({ model }: { model: string }) {
+export function Chat({
+  model,
+  promptTrigger,
+  onPromptConsumed,
+}: {
+  model: string;
+  promptTrigger?: string | null;
+  onPromptConsumed?: () => void;
+}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -32,12 +40,13 @@ export function Chat({ model }: { model: string }) {
   const [origin, setOrigin] = useState<MapPoint | null>(null);
   const [locationState, setLocationState] = useState<LocationState>("idle");
   const threadRef = useRef<HTMLDivElement>(null);
+  const consumedPromptRef = useRef<string | null>(null);
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, pending]);
 
-  function locate() {
+  const locate = useCallback(() => {
     if (locationState === "ready" || locationState === "locating") return;
     if (!navigator.geolocation) {
       setLocationState("unsupported");
@@ -52,9 +61,9 @@ export function Chat({ model }: { model: string }) {
       () => setLocationState("denied"),
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 },
     );
-  }
+  }, [locationState]);
 
-  async function sendText(text: string) {
+  const sendText = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || pending) return;
 
@@ -90,7 +99,18 @@ export function Chat({ model }: { model: string }) {
     } finally {
       setPending(false);
     }
-  }
+  }, [locate, messages, pending]);
+
+  useEffect(() => {
+    if (!promptTrigger) {
+      consumedPromptRef.current = null;
+      return;
+    }
+    if (pending || consumedPromptRef.current === promptTrigger) return;
+    consumedPromptRef.current = promptTrigger;
+    void sendText(promptTrigger);
+    onPromptConsumed?.();
+  }, [promptTrigger, pending, onPromptConsumed, sendText]);
 
   function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -98,23 +118,48 @@ export function Chat({ model }: { model: string }) {
   }
 
   return (
-    <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-1 flex-col px-4 pt-6 sm:px-6">
-      <header className="flex items-end justify-between gap-4 border-b border-zinc-200 pb-4 dark:border-zinc-800">
+    <div className="mx-auto flex h-[620px] max-h-[85vh] w-full max-w-4xl flex-col rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 sm:p-6 shadow-sm">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-4">
         <div>
-          <p className="text-sm tracking-wide text-zinc-500 uppercase">gemmaday · Lubumbashi</p>
-          <h1 className="text-2xl font-semibold tracking-tight">Où veux-tu aller ?</h1>
+          <p className="text-xs font-semibold tracking-wider text-zinc-500 uppercase">
+            Service de transport · Lubumbashi
+          </p>
+          <h2 className="text-lg sm:text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+            Rechercher un arrêt de taxi
+          </h2>
         </div>
-        <p className="shrink-0 rounded-full bg-zinc-100 px-3 py-1 font-mono text-xs whitespace-nowrap text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-          {model}
-        </p>
+
+        <div className="flex items-center gap-2">
+          {locationState === "ready" ? (
+            <span className="rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              Position GPS active
+            </span>
+          ) : locationState === "locating" ? (
+            <span className="rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              Localisation...
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={locate}
+              className="rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+            >
+              Activer ma position
+            </button>
+          )}
+
+          <span className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-900 px-2.5 py-1.5 font-mono text-xs text-zinc-600 dark:text-zinc-400">
+            {model}
+          </span>
+        </div>
       </header>
 
-      <div ref={threadRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto py-6">
+      <div ref={threadRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto py-5">
         {messages.length === 0 ? (
           <div className="flex flex-1 flex-col justify-end gap-4">
-            <p className="max-w-xl text-lg leading-8 text-zinc-600 dark:text-zinc-300">
-              Tu viens d’arriver et la ville ne t’est pas familière. Dis à Gemma où tu dois te
-              rendre. Elle t’indique l’arrêt de taxi, son adresse, et le chemin depuis là où tu es.
+            <p className="max-w-xl text-sm sm:text-base leading-relaxed text-zinc-600 dark:text-zinc-400">
+              Indiquez votre lieu de destination à Lubumbashi. Nous sélectionnons l'arrêt le plus
+              proche, son adresse et l'itinéraire d'accès.
             </p>
             <div className="flex flex-wrap gap-2">
               {suggestions.map((suggestion) => (
@@ -122,7 +167,7 @@ export function Chat({ model }: { model: string }) {
                   key={suggestion}
                   type="button"
                   onClick={() => void sendText(suggestion)}
-                  className="rounded-full border border-zinc-200 px-3 py-1.5 text-left text-sm hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                  className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 px-3 py-1.5 text-left text-xs sm:text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
                 >
                   {suggestion}
                 </button>
@@ -134,16 +179,18 @@ export function Chat({ model }: { model: string }) {
             message.role === "user" ? (
               <article
                 key={`${message.role}-${index}`}
-                className="ml-auto max-w-[85%] rounded-2xl bg-zinc-900 px-4 py-3 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900"
+                className="ml-auto max-w-[85%] rounded-lg bg-zinc-900 px-4 py-3 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900"
               >
-                <p className="mb-1 text-xs tracking-wide text-zinc-400 uppercase dark:text-zinc-500">
-                  Toi
+                <p className="mb-1 text-[11px] font-semibold tracking-wide text-zinc-400 dark:text-zinc-500 uppercase">
+                  Votre demande
                 </p>
-                <p className="whitespace-pre-wrap leading-7">{message.text}</p>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.text}</p>
               </article>
             ) : (
               <article key={`${message.role}-${index}`} className="w-full">
-                <p className="mb-2 text-xs tracking-wide text-zinc-500 uppercase">Gemma</p>
+                <p className="mb-1 text-[11px] font-semibold tracking-wide text-zinc-500 uppercase">
+                  Orientation
+                </p>
                 <MessageContent text={message.text} />
                 {message.stop ? (
                   <StopPanel stop={message.stop} origin={origin} locationState={locationState} />
@@ -152,9 +199,9 @@ export function Chat({ model }: { model: string }) {
             ),
           )
         )}
-        {pending ? <p className="text-sm text-zinc-500">Gemma cherche l’arrêt…</p> : null}
+        {pending ? <p className="text-xs text-zinc-500">Recherche de l'arrêt en cours...</p> : null}
         {error ? (
-          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+          <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
             {error}
           </p>
         ) : null}
@@ -162,10 +209,10 @@ export function Chat({ model }: { model: string }) {
 
       <form
         onSubmit={sendMessage}
-        className="flex shrink-0 gap-2 border-t border-zinc-200 bg-white py-3 dark:border-zinc-800 dark:bg-black"
+        className="flex shrink-0 gap-2 border-t border-zinc-200 dark:border-zinc-800 pt-3 bg-white dark:bg-zinc-950"
       >
         <label className="sr-only" htmlFor="message">
-          Message
+          Destination
         </label>
         <textarea
           id="message"
@@ -178,13 +225,13 @@ export function Chat({ model }: { model: string }) {
             }
           }}
           rows={2}
-          placeholder="Je veux aller au marché Kenya…"
-          className="min-h-14 flex-1 resize-none rounded-2xl border border-zinc-200 bg-transparent px-4 py-3 outline-none focus:border-zinc-400 dark:border-zinc-800"
+          placeholder="Ex : Je veux aller au marché Kenya..."
+          className="min-h-12 flex-1 resize-none rounded-lg border border-zinc-300 dark:border-zinc-700 bg-transparent px-3 py-2 text-sm outline-none focus:border-zinc-900 dark:focus:border-zinc-100"
         />
         <button
           type="submit"
           disabled={pending || draft.trim().length === 0}
-          className="h-14 rounded-2xl bg-zinc-900 px-5 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+          className="h-12 rounded-lg bg-zinc-900 px-5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 transition-colors cursor-pointer"
         >
           Envoyer
         </button>
